@@ -575,14 +575,24 @@ impl App {
     // ---------------------------------------------------------------------------
 
     fn render_main(&self, frame: &mut Frame, area: Rect) {
-        // Layout vertical: barra de estado abajo; si hay hilo abierto, reservar
-        // espacio para el panel [3].
-        let (main_area, thread_area, bar_area) = if self.focus == Focus::Thread {
+        // Panel inferior según el contexto: el hilo [3] si hay foco en él, o el
+        // editor de comentario mientras se redacta. La barra de estado va abajo.
+        let show_thread = self.focus == Focus::Thread;
+        let show_editor = self.mode == Mode::EditComment;
+        let panel_height: u16 = if show_thread {
+            6
+        } else if show_editor {
+            5
+        } else {
+            0
+        };
+
+        let (main_area, panel_area, bar_area) = if panel_height > 0 {
             let vert = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(3),
-                    Constraint::Length(6),
+                    Constraint::Length(panel_height),
                     Constraint::Length(1),
                 ])
                 .split(area);
@@ -607,11 +617,73 @@ impl App {
         self.render_files_panel(frame, files_area);
         self.render_diff_panel(frame, diff_area);
 
-        if let Some(ta) = thread_area {
-            self.render_thread_panel(frame, ta);
+        if let Some(pa) = panel_area {
+            if show_thread {
+                self.render_thread_panel(frame, pa);
+            } else {
+                self.render_comment_editor(frame, pa);
+            }
         }
 
-        render_status_bar(frame, bar_area, self.mode);
+        self.render_status_bar(frame, bar_area);
+    }
+
+    /// Rango de índices aplanados seleccionado mientras se está en modo rango.
+    fn active_range(&self) -> Option<(usize, usize)> {
+        if self.mode == Mode::RangeSelect {
+            let lo = self.range_start.min(self.cursor_line);
+            let hi = self.range_start.max(self.cursor_line);
+            Some((lo, hi))
+        } else {
+            None
+        }
+    }
+
+    /// Caja del editor de comentario: anclaje, texto en curso y ayuda de teclas.
+    fn render_comment_editor(&self, frame: &mut Frame, area: Rect) {
+        let anchor = match &self.comment_target {
+            Some(CommentTarget::Line { file, line, .. }) => format!("{file}:{line}"),
+            Some(CommentTarget::Range {
+                file, start, end, ..
+            }) => format!("{file}:{start}-{end}"),
+            None => String::new(),
+        };
+
+        let block = Block::default()
+            .title(format!("✎ Comentario · {anchor}"))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let lines = vec![
+            TuiLine::raw(format!("{}▏", self.comment_buf)),
+            TuiLine::styled(
+                "Ctrl+S guardar · Esc cancelar",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ];
+        let para = Paragraph::new(lines).wrap(Wrap { trim: false });
+        frame.render_widget(para, inner);
+    }
+
+    /// Barra inferior de atajos según el modo; en rango muestra cuántas líneas
+    /// llevás seleccionadas.
+    fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
+        let text = match self.mode {
+            Mode::Navigate => {
+                "1/2 panel · j/k mover · c comentar · v rango · t split · g final · q salir"
+                    .to_owned()
+            }
+            Mode::EditComment => "Ctrl+S guardar · Esc cancelar".to_owned(),
+            Mode::RangeSelect => {
+                let n = self.active_range().map_or(0, |(lo, hi)| hi - lo + 1);
+                format!("RANGO: {n} líneas · j/k extender · c comentar · Esc cancelar")
+            }
+            Mode::Final => "← LGTM · → KO · Ctrl+S guardar · Esc volver".to_owned(),
+        };
+        let bar = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(bar, area);
     }
 
     fn render_thread_panel(&self, frame: &mut Frame, area: Rect) {
@@ -793,36 +865,46 @@ impl App {
             let mut old_lines: Vec<TuiLine> = Vec::new();
             let mut new_lines: Vec<TuiLine> = Vec::new();
 
+            let active_range = self.active_range();
             let mut flat_idx: usize = 0;
             for hunk in &fd.hunks {
                 for line in &hunk.lines {
                     let is_cursor = flat_idx == self.cursor_line;
+                    let in_range =
+                        active_range.is_some_and(|(lo, hi)| flat_idx >= lo && flat_idx <= hi);
+                    let gutter = range_gutter(active_range.is_some(), in_range);
                     let has_comment = self.line_has_comment(fd, line);
                     let comment_mark = if has_comment { " 💬" } else { "" };
-                    let cursor_style = if is_cursor {
+                    let mut cursor_style = if is_cursor {
                         Style::default().add_modifier(Modifier::REVERSED)
                     } else {
                         Style::default()
                     };
+                    if in_range {
+                        cursor_style = cursor_style.bg(Color::Blue);
+                    }
 
                     match line.kind {
                         LineKind::Removed => {
                             let lineno = line.old_lineno.unwrap_or(0);
-                            let text = format!("{lineno:>4} - {}{comment_mark}", line.content);
+                            let text =
+                                format!("{gutter}{lineno:>4} - {}{comment_mark}", line.content);
                             old_lines.push(TuiLine::styled(text, cursor_style.fg(Color::Red)));
                             new_lines.push(TuiLine::raw(""));
                         }
                         LineKind::Added => {
                             let lineno = line.new_lineno.unwrap_or(0);
-                            let text = format!("{lineno:>4} + {}{comment_mark}", line.content);
+                            let text =
+                                format!("{gutter}{lineno:>4} + {}{comment_mark}", line.content);
                             old_lines.push(TuiLine::raw(""));
                             new_lines.push(TuiLine::styled(text, cursor_style.fg(Color::Green)));
                         }
                         LineKind::Context => {
                             let old_no = line.old_lineno.unwrap_or(0);
                             let new_no = line.new_lineno.unwrap_or(0);
-                            let old_text = format!("{old_no:>4}   {}", line.content);
-                            let new_text = format!("{new_no:>4}   {}{comment_mark}", line.content);
+                            let old_text = format!("{gutter}{old_no:>4}   {}", line.content);
+                            let new_text =
+                                format!("{gutter}{new_no:>4}   {}{comment_mark}", line.content);
                             old_lines.push(TuiLine::styled(old_text, cursor_style));
                             new_lines.push(TuiLine::styled(new_text, cursor_style));
                         }
@@ -861,36 +943,51 @@ impl App {
         frame.render_widget(block, area);
 
         if let Some(fd) = self.diff.files.get(self.selected_file) {
+            let active_range = self.active_range();
             let mut lines: Vec<TuiLine> = Vec::new();
             let mut flat_idx: usize = 0;
 
             for hunk in &fd.hunks {
                 for line in &hunk.lines {
                     let is_cursor = flat_idx == self.cursor_line;
+                    let in_range =
+                        active_range.is_some_and(|(lo, hi)| flat_idx >= lo && flat_idx <= hi);
+                    let gutter = range_gutter(active_range.is_some(), in_range);
                     let has_comment = self.line_has_comment(fd, line);
                     let comment_mark = if has_comment { " 💬" } else { "" };
-                    let cursor_style = if is_cursor {
+                    let mut cursor_style = if is_cursor {
                         Style::default().add_modifier(Modifier::REVERSED)
                     } else {
                         Style::default()
                     };
+                    if in_range {
+                        cursor_style = cursor_style.bg(Color::Blue);
+                    }
 
                     let tui_line = match line.kind {
                         LineKind::Removed => {
                             let old_no = line.old_lineno.unwrap_or(0);
-                            let text = format!("{old_no:>4}      - {}{comment_mark}", line.content);
+                            let text = format!(
+                                "{gutter}{old_no:>4}      - {}{comment_mark}",
+                                line.content
+                            );
                             TuiLine::styled(text, cursor_style.fg(Color::Red))
                         }
                         LineKind::Added => {
                             let new_no = line.new_lineno.unwrap_or(0);
-                            let text = format!("{new_no:>4}      + {}{comment_mark}", line.content);
+                            let text = format!(
+                                "{gutter}{new_no:>4}      + {}{comment_mark}",
+                                line.content
+                            );
                             TuiLine::styled(text, cursor_style.fg(Color::Green))
                         }
                         LineKind::Context => {
                             let old_no = line.old_lineno.unwrap_or(0);
                             let new_no = line.new_lineno.unwrap_or(0);
-                            let text =
-                                format!("{old_no:>4} {new_no:>4}   {}{comment_mark}", line.content);
+                            let text = format!(
+                                "{gutter}{old_no:>4} {new_no:>4}   {}{comment_mark}",
+                                line.content
+                            );
                             TuiLine::styled(text, cursor_style)
                         }
                     };
@@ -1023,20 +1120,20 @@ fn render_empty(frame: &mut Frame, area: Rect) {
     frame.render_widget(msg, inner);
 }
 
-fn render_status_bar(frame: &mut Frame, area: Rect, mode: Mode) {
-    let text = match mode {
-        Mode::Navigate => {
-            "1/2 panel · j/k mover · c comentar · v rango · t split · g final · q salir"
-        }
-        Mode::EditComment => "Ctrl+S guardar · Esc cancelar",
-        Mode::RangeSelect => "j/k extender rango · c comentar · Esc cancelar",
-        Mode::Final => "← LGTM · → KO · Ctrl+S guardar · Esc volver",
-    };
-    let bar = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(bar, area);
+/// Formatea el anclaje de un comentario: `archivo:N` o `archivo:N-M`.
+/// Marcador de canaleta para una línea del diff: vacío fuera del modo rango
+/// (no desplaza el render normal), `▌` para una línea dentro del rango activo y
+/// un espacio para las demás líneas mientras se selecciona.
+fn range_gutter(range_active: bool, in_range: bool) -> &'static str {
+    if !range_active {
+        ""
+    } else if in_range {
+        "▌"
+    } else {
+        " "
+    }
 }
 
-/// Formatea el anclaje de un comentario: `archivo:N` o `archivo:N-M`.
 fn build_anchor(c: &crate::review::Comment) -> String {
     if c.start_line == c.end_line {
         format!("{}:{}", c.file, c.start_line)
