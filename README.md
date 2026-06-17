@@ -1,32 +1,31 @@
 # code-review-tui
 
-Revisor de código en la terminal, con el flujo mental de una *review* de pull
-request de GitHub, para los cambios **aún no commiteados** de cualquier repo git.
-Escrito en Rust con [ratatui](https://ratatui.rs).
+A terminal code reviewer with the mental flow of a GitHub pull request review,
+for the **uncommitted** changes of any git repo. Written in Rust with
+[ratatui](https://ratatui.rs).
 
-Mostrá el diff del working tree, dejá comentarios anclados a líneas o rangos,
-escribí un comentario general, elegí un veredicto **LGTM** / **KO** y, al
-finalizar, generá un reporte Markdown estilo PR con todo lo anterior.
+Show the working-tree diff, leave comments anchored to lines or ranges, write an
+overall comment, pick an **LGTM** / **KO** verdict and, when you finish, generate
+a PR-style Markdown report with everything above.
 
-## Características
+## Features
 
-- **Diff de lo no commiteado** contra `HEAD`: staged + unstaged + untracked +
-  borrados, en un solo conjunto de cambios (vía `git2`/libgit2).
-- **Vista lateral (split) por defecto** con columnas OLD | NEW, o **unificada**
-  con la tecla `t`.
-- **Lado activo conmutable** en split (`h`/`l` o `←`/`→`): el cursor se resalta
-  en la columna elegida y los comentarios se anclan a ese lado.
-- **Comentarios** de una línea (`c`) o de un **rango** multilínea (`v`),
-  anclados a `archivo:línea` / `archivo:Lini-Lfin`.
-- **Resaltado de sintaxis** para PHP y TypeScript.
-- **Paneles numerados** y enfocables: `[1]` FILES, `[2]` DIFF, `[3]` hilo de
-  comentario.
-- **Pantalla final** con el resumen de comentarios, el comentario general y el
-  veredicto; al guardar escribe `code-review-<fecha>.md` en el directorio actual.
+- **Diff of uncommitted changes** against `HEAD`: staged + unstaged + untracked +
+  deletions, in a single change set (via `git2`/libgit2).
+- **Side-by-side (split) view by default** with OLD | NEW columns, or **unified**
+  with the `t` key.
+- **Switchable active side** in split (`h`/`l` or `←`/`→`): the cursor is
+  highlighted on the chosen column and comments anchor to that side.
+- **Comments** on a single line (`c`) or a multi-line **range** (`v`), anchored
+  to `file:line` / `file:Lstart-Lend`.
+- **Syntax highlighting** for PHP and TypeScript.
+- **Numbered, focusable panels**: `[1]` FILES, `[2]` DIFF, `[3]` comment thread.
+- **Final screen** with the comment summary, the overall comment and the
+  verdict; on save it writes `code-review-<date>.md` to the current directory.
 
-## Instalación
+## Installation
 
-Requiere un toolchain de Rust (edición 2024; probado con 1.95).
+Requires a Rust toolchain (edition 2024; tested with 1.95).
 
 ```bash
 git clone git@github.com:pauhoms/code-review-tui.git
@@ -34,50 +33,50 @@ cd code-review-tui
 cargo build --release
 ```
 
-El binario queda en `target/release/reviewv2`.
+The binary lands at `target/release/reviewv2`.
 
-## Uso
+## Usage
 
-Ejecutalo dentro de un repo git con cambios sin commitear:
+Run it inside a git repo with uncommitted changes:
 
 ```bash
-cd /ruta/a/tu/repo
-/ruta/a/code-review-tui/target/release/reviewv2
+cd /path/to/your/repo
+/path/to/code-review-tui/target/release/reviewv2
 ```
 
-Si no hay cambios, muestra un estado vacío y se sale con `q`. Al finalizar una
-review, el reporte Markdown se escribe en el directorio actual.
+If there are no changes, it shows an empty state and exits with `q`. When you
+finish a review, the Markdown report is written to the current directory.
 
-## Atajos de teclado
+## Keybindings
 
-| Tecla | Acción |
+| Key | Action |
 |---|---|
-| `1` / `2` | Enfocar panel FILES / DIFF |
-| `Tab` / `Shift+Tab` | Ciclar el foco entre paneles |
-| `j` / `k` | Mover (archivo si FILES, línea si DIFF) |
-| `h` / `l` · `←` / `→` | Cambiar el lado activo (OLD / NEW) en split |
-| `t` | Alternar vista split / unificada |
-| `c` | Comentar la línea bajo el cursor |
-| `v` | Iniciar selección de rango (`j`/`k` extiende, `c` comenta) |
-| `↵` | Abrir el hilo de comentario de la línea |
-| `g` | Pantalla final (comentario general + veredicto) |
-| `Ctrl+S` | Guardar comentario / finalizar y escribir el reporte |
-| `Esc` | Cancelar / volver |
-| `q` | Salir |
+| `1` / `2` | Focus the FILES / DIFF panel |
+| `Tab` / `Shift+Tab` | Cycle focus between panels |
+| `j` / `k` | Move (file when in FILES, line when in DIFF) |
+| `h` / `l` · `←` / `→` | Switch the active side (OLD / NEW) in split |
+| `t` | Toggle split / unified view |
+| `c` | Comment the line under the cursor |
+| `v` | Start a range selection (`j`/`k` extends, `c` comments) |
+| `↵` | Open the comment thread for the line |
+| `g` | Final screen (overall comment + verdict) |
+| `Ctrl+S` | Save comment / finish and write the report |
+| `Esc` | Cancel / go back |
+| `q` | Quit |
 
-En la pantalla final: `↑`/`↓` recorre los comentarios, `←`/`→` elige el
-veredicto (LGTM / KO) y `↵` salta al hilo del comentario seleccionado.
+On the final screen: `↑`/`↓` walks the comments, `←`/`→` picks the verdict
+(LGTM / KO) and `↵` jumps to the thread of the selected comment.
 
-## Arquitectura
+## Architecture
 
-Tres capas desacopladas y testeables:
+Three decoupled, testable layers:
 
-1. **`diff`** — adquisición del diff no commiteado con `git2` y modelo
-   estructurado (archivos → hunks → líneas tipadas con números viejo/nuevo).
-2. **`review`** — modelo puro de la review (comentarios, general, veredicto) y
-   su serialización a Markdown determinista, separada de la escritura a disco.
-3. **`app`** — la TUI ratatui que orquesta las dos anteriores; todo el estado y
-   el manejo de eventos es dirigible *headless* para poder testearlo.
+1. **`diff`** — acquires the uncommitted diff with `git2` and builds a structured
+   model (files → hunks → typed lines with old/new line numbers).
+2. **`review`** — pure model of the review (comments, overall comment, verdict)
+   and its deterministic Markdown serialization, kept separate from disk I/O.
+3. **`app`** — the ratatui TUI that orchestrates the previous two; all state and
+   event handling is drivable *headless* so it can be tested.
 
 ## Tests
 
@@ -85,6 +84,10 @@ Tres capas desacopladas y testeables:
 cargo test
 ```
 
-La TUI se prueba sin terminal real con `ratatui::backend::TestBackend`
-(render a un buffer de celdas) inyectando eventos de teclado; las capas de diff
-y review se prueban con repos git temporales y comparación de strings.
+The TUI is tested without a real terminal using `ratatui::backend::TestBackend`
+(rendering to a cell buffer) and injecting keyboard events; the diff and review
+layers are tested with temporary git repositories and string comparison.
+
+## License
+
+[MIT](LICENSE)
