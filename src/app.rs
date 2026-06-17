@@ -943,6 +943,12 @@ impl App {
                 }
             }
 
+            // Scroll: descartamos las líneas por encima de la ventana del cursor
+            // para que la línea seleccionada siga visible al bajar.
+            let offset = scroll_offset(self.cursor_line, old_content_area.height);
+            scroll_lines(&mut old_lines, offset);
+            scroll_lines(&mut new_lines, offset);
+
             let old_para = Paragraph::new(old_lines).wrap(Wrap { trim: false });
             let new_para = Paragraph::new(new_lines).wrap(Wrap { trim: false });
             frame.render_widget(old_para, old_content_area);
@@ -1038,6 +1044,10 @@ impl App {
                     flat_idx += 1;
                 }
             }
+
+            // Scroll: mantener visible la línea del cursor al bajar.
+            let offset = scroll_offset(self.cursor_line, inner.height);
+            scroll_lines(&mut lines, offset);
 
             let para = Paragraph::new(lines).wrap(Wrap { trim: false });
             frame.render_widget(para, inner);
@@ -1164,6 +1174,24 @@ fn render_empty(frame: &mut Frame, area: Rect) {
 }
 
 /// Formatea el anclaje de un comentario: `archivo:N` o `archivo:N-M`.
+/// Desplazamiento vertical para que la línea `cursor` quede dentro de una
+/// ventana de `visible_rows` filas: 0 mientras el cursor entra en pantalla, y
+/// lo justo para dejarlo en la última fila visible cuando baja más allá.
+fn scroll_offset(cursor: usize, visible_rows: u16) -> usize {
+    let visible = visible_rows as usize;
+    if visible == 0 {
+        return 0;
+    }
+    cursor.saturating_sub(visible - 1)
+}
+
+/// Descarta las primeras `offset` líneas para aplicar el scroll (recortar arriba
+/// es robusto ante el wrap del Paragraph).
+fn scroll_lines(lines: &mut Vec<TuiLine>, offset: usize) {
+    let n = offset.min(lines.len());
+    lines.drain(..n);
+}
+
 /// Marcador de canaleta para una línea del diff: vacío fuera del modo rango
 /// (no desplaza el render normal), `▌` para una línea dentro del rango activo y
 /// un espacio para las demás líneas mientras se selecciona.
