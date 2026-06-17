@@ -138,19 +138,21 @@ fn hl05_php_added_line_highlights_keyword_and_tints_background() {
         "el keyword `return` debe colorearse con Color::Magenta (color fijado por el contrato)"
     );
 
-    // (c) La fila de la línea añadida debe tener tinte de FONDO: alguna celda de
-    // esa fila con `.bg == Color::Green` (color de fondo fijado para 'añadido').
-    let added_bg_present = (0..WIDTH).any(|x| buffer[(x, kw_y)].bg == Color::Green);
+    // (c) La fila de la línea añadida debe tener tinte de FONDO oscuro (estilo
+    // GitHub) para no tapar el resaltado: alguna celda de esa fila con el verde
+    // oscuro fijado para 'añadido'.
+    let added_bg = Color::Rgb(19, 48, 30);
+    let added_bg_present = (0..WIDTH).any(|x| buffer[(x, kw_y)].bg == added_bg);
     assert!(
         added_bg_present,
-        "la línea añadida debe tener tinte de fondo Color::Green en al menos una celda de su fila"
+        "la línea añadida debe tener el tinte de fondo verde oscuro en al menos una celda de su fila"
     );
 
     // La celda del keyword también debe llevar el fondo de 'añadido' (el tinte
     // de fondo cubre la línea, incluido el código resaltado).
     assert_eq!(
         buffer[(kw_x, kw_y)].bg,
-        Color::Green,
-        "la celda del keyword resaltado debe conservar el tinte de fondo Color::Green de la línea añadida"
+        added_bg,
+        "la celda del keyword resaltado debe conservar el tinte de fondo de la línea añadida"
     );
 }

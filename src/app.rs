@@ -14,6 +14,12 @@ use crate::diff::{Diff, LineKind};
 use crate::highlight::{TokenKind, detect_language, tokenize};
 use crate::review::{Review, Side, Verdict};
 
+// Tintes de fondo del diff: oscuros y desaturados (estilo GitHub) para que el
+// resaltado de sintaxis del primer plano siga siendo legible encima.
+const BG_ADDED: Color = Color::Rgb(19, 48, 30);
+const BG_REMOVED: Color = Color::Rgb(64, 25, 27);
+const BG_RANGE: Color = Color::Rgb(38, 52, 94);
+
 // ---------------------------------------------------------------------------
 // Tipos públicos de estado
 // ---------------------------------------------------------------------------
@@ -886,15 +892,15 @@ impl App {
 
                     // Estilo base: bg según kind de línea (fondo de +/-).
                     let line_bg_style = match line.kind {
-                        LineKind::Added => Style::default().bg(Color::Green),
-                        LineKind::Removed => Style::default().bg(Color::Red),
+                        LineKind::Added => Style::default().bg(BG_ADDED),
+                        LineKind::Removed => Style::default().bg(BG_REMOVED),
                         LineKind::Context => Style::default(),
                     };
                     // Modificadores de cursor/rango por encima del bg de línea.
                     let mut row_style = line_bg_style;
                     if in_range {
                         // El rango azul pisa al bg de añadido/removido.
-                        row_style = row_style.bg(Color::Blue);
+                        row_style = row_style.bg(BG_RANGE);
                     }
                     if is_cursor {
                         row_style = row_style.add_modifier(Modifier::REVERSED);
@@ -995,13 +1001,13 @@ impl App {
 
                     // Estilo base: bg según kind de línea.
                     let line_bg_style = match line.kind {
-                        LineKind::Added => Style::default().bg(Color::Green),
-                        LineKind::Removed => Style::default().bg(Color::Red),
+                        LineKind::Added => Style::default().bg(BG_ADDED),
+                        LineKind::Removed => Style::default().bg(BG_REMOVED),
                         LineKind::Context => Style::default(),
                     };
                     let mut row_style = line_bg_style;
                     if in_range {
-                        row_style = row_style.bg(Color::Blue);
+                        row_style = row_style.bg(BG_RANGE);
                     }
                     if is_cursor {
                         row_style = row_style.add_modifier(Modifier::REVERSED);
