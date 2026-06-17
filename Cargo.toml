@@ -1,0 +1,21 @@
+[package]
+name = "reviewv2"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "reviewv2"
+path = "src/lib.rs"
+
+[[bin]]
+name = "reviewv2"
+path = "src/main.rs"
+
+[dependencies]
+# default-features=false: solo necesitamos lectura local del repo, no transporte de red (evita openssl-sys/libssl-dev).
+git2 = { version = "0.19", default-features = false }
+ratatui = "0.29"
+crossterm = "0.28"
+
+[dev-dependencies]
+tempfile = "3"
