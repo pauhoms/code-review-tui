@@ -2,7 +2,7 @@
 
 // --- Tipos públicos del modelo ---
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
     Old,
     New,

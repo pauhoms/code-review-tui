@@ -100,6 +100,8 @@ pub struct App {
     out_dir: PathBuf,
     /// Fecha inyectada para el nombre del reporte.
     date: String,
+    /// Columna activa en la vista split: OLD (izquierda) o NEW (derecha).
+    active_side: Side,
 }
 
 impl App {
@@ -126,6 +128,7 @@ impl App {
             selected_comment: 0,
             out_dir,
             date,
+            active_side: Side::New,
         }
     }
 
@@ -159,6 +162,10 @@ impl App {
         self.selected_comment
     }
 
+    pub fn active_side(&self) -> Side {
+        self.active_side
+    }
+
     // --- Manejador de eventos ---
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Outcome {
@@ -188,6 +195,8 @@ impl App {
                     };
                 }
                 KeyCode::Char('g') => self.mode = Mode::Final,
+                KeyCode::Char('h') | KeyCode::Left => self.active_side = Side::Old,
+                KeyCode::Char('l') | KeyCode::Right => self.active_side = Side::New,
                 KeyCode::Char('j') => self.nav_down(),
                 KeyCode::Char('k') => self.nav_up(),
                 KeyCode::Char('c') => self.start_line_comment(),
@@ -239,6 +248,8 @@ impl App {
                 KeyCode::Esc => {
                     self.mode = Mode::Navigate;
                 }
+                KeyCode::Char('h') | KeyCode::Left => self.active_side = Side::Old,
+                KeyCode::Char('l') | KeyCode::Right => self.active_side = Side::New,
                 KeyCode::Char('j') => {
                     let max = self.flat_lines_count().saturating_sub(1);
                     if self.cursor_line < max {
@@ -315,7 +326,7 @@ impl App {
             return;
         }
         if let Some(line) = self.flat_line(self.cursor_line) {
-            let (side, lineno) = Self::anchor_of(line);
+            let anchors = Self::line_anchors(line);
             let file_str = if self.diff.files.is_empty() {
                 String::new()
             } else {
@@ -326,9 +337,9 @@ impl App {
             };
             let has = self.review.comments().iter().any(|c| {
                 c.file == file_str
-                    && c.side == side
-                    && lineno >= c.start_line
-                    && lineno <= c.end_line
+                    && anchors
+                        .iter()
+                        .any(|(s, n)| c.side == *s && *n >= c.start_line && *n <= c.end_line)
             });
             if has {
                 self.focus = Focus::Thread;
@@ -344,7 +355,7 @@ impl App {
         }
         let idx = self.selected_comment.min(comments.len() - 1);
         let comment_file = comments[idx].file.clone();
-        let comment_side = comments[idx].side.clone();
+        let comment_side = comments[idx].side;
         let comment_start = comments[idx].start_line;
 
         // Buscar el índice de archivo que coincide.
@@ -373,7 +384,7 @@ impl App {
         let mut idx = 0usize;
         for hunk in &fd.hunks {
             for line in &hunk.lines {
-                let (line_side, line_no) = Self::anchor_of(line);
+                let (line_side, line_no) = Self::anchor_of(line, *side);
                 if line_side == *side && line_no == lineno {
                     return idx;
                 }
@@ -452,11 +463,31 @@ impl App {
         None
     }
 
-    /// Dada una línea aplanada, calcula (side, line_number) según la regla de anclaje.
-    fn anchor_of(line: &crate::diff::Line) -> (Side, u32) {
+    /// Dada una línea aplanada y el lado activo, calcula (side, line_number).
+    /// - Removed → siempre (Old, old_lineno).
+    /// - Added   → siempre (New, new_lineno).
+    /// - Context → respeta `active`: Old→old_lineno, New→new_lineno.
+    fn anchor_of(line: &crate::diff::Line, active: Side) -> (Side, u32) {
         match line.kind {
             LineKind::Removed => (Side::Old, line.old_lineno.unwrap_or(0)),
-            _ => (Side::New, line.new_lineno.unwrap_or(0)),
+            LineKind::Added => (Side::New, line.new_lineno.unwrap_or(0)),
+            LineKind::Context => match active {
+                Side::Old => (Side::Old, line.old_lineno.unwrap_or(0)),
+                Side::New => (Side::New, line.new_lineno.unwrap_or(0)),
+            },
+        }
+    }
+
+    /// Devuelve todos los anclajes válidos de una línea (para el marcador 💬).
+    /// Context puede matchear tanto (Old, old_lineno) como (New, new_lineno).
+    fn line_anchors(line: &crate::diff::Line) -> Vec<(Side, u32)> {
+        match line.kind {
+            LineKind::Removed => vec![(Side::Old, line.old_lineno.unwrap_or(0))],
+            LineKind::Added => vec![(Side::New, line.new_lineno.unwrap_or(0))],
+            LineKind::Context => vec![
+                (Side::Old, line.old_lineno.unwrap_or(0)),
+                (Side::New, line.new_lineno.unwrap_or(0)),
+            ],
         }
     }
 
@@ -466,7 +497,7 @@ impl App {
 
     fn start_line_comment(&mut self) {
         if let Some(line) = self.flat_line(self.cursor_line) {
-            let (side, lineno) = Self::anchor_of(line);
+            let (side, lineno) = Self::anchor_of(line, self.active_side);
             let file = if self.diff.files.is_empty() {
                 String::new()
             } else {
@@ -500,8 +531,8 @@ impl App {
         let line_hi = self.flat_line(hi);
 
         if let (Some(ll), Some(lh)) = (line_lo, line_hi) {
-            let (side_lo, num_lo) = Self::anchor_of(ll);
-            let (_side_hi, num_hi) = Self::anchor_of(lh);
+            let (side_lo, num_lo) = Self::anchor_of(ll, self.active_side);
+            let (_side_hi, num_hi) = Self::anchor_of(lh, self.active_side);
             let file = self.diff.files[self.selected_file]
                 .path
                 .display()
@@ -709,18 +740,19 @@ impl App {
                 .to_string()
         };
 
-        // Recopilar los comentarios de la línea bajo el cursor.
+        // Recopilar los comentarios de la línea bajo el cursor, en cualquiera de
+        // sus lados (consistente con el marcador 💬 y con open_thread).
         let comments_on_line: Vec<&crate::review::Comment> =
             if let Some(line) = self.flat_line(self.cursor_line) {
-                let (side, lineno) = Self::anchor_of(line);
+                let anchors = Self::line_anchors(line);
                 self.review
                     .comments()
                     .iter()
                     .filter(|c| {
                         c.file == file_str
-                            && c.side == side
-                            && lineno >= c.start_line
-                            && lineno <= c.end_line
+                            && anchors.iter().any(|(side, lineno)| {
+                                *side == c.side && *lineno >= c.start_line && *lineno <= c.end_line
+                            })
                     })
                     .collect()
             } else {
@@ -728,7 +760,7 @@ impl App {
             };
 
         let anchor_label = if let Some(line) = self.flat_line(self.cursor_line) {
-            let (_side, lineno) = Self::anchor_of(line);
+            let (_side, lineno) = Self::anchor_of(line, self.active_side);
             format!("{file_str}:{lineno}")
         } else {
             file_str.clone()
@@ -843,9 +875,27 @@ impl App {
         let old_area = half[0];
         let new_area = half[1];
 
-        // Encabezados OLD / NEW.
-        let old_header = Block::default().title("OLD").borders(Borders::BOTTOM);
-        let new_header = Block::default().title("NEW").borders(Borders::BOTTOM);
+        // Encabezados OLD / NEW: el lado activo se resalta en amarillo/bold.
+        let active_title_style = Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
+        let inactive_title_style = Style::default();
+        let old_title_style = if self.active_side == Side::Old {
+            active_title_style
+        } else {
+            inactive_title_style
+        };
+        let new_title_style = if self.active_side == Side::New {
+            active_title_style
+        } else {
+            inactive_title_style
+        };
+        let old_header = Block::default()
+            .title(Span::styled("OLD", old_title_style))
+            .borders(Borders::BOTTOM);
+        let new_header = Block::default()
+            .title(Span::styled("NEW", new_title_style))
+            .borders(Borders::BOTTOM);
 
         // Calcula el área de contenido dentro de los encabezados.
         let old_content_area = Rect {
@@ -896,24 +946,31 @@ impl App {
                         LineKind::Removed => Style::default().bg(BG_REMOVED),
                         LineKind::Context => Style::default(),
                     };
-                    // Modificadores de cursor/rango por encima del bg de línea.
-                    let mut row_style = line_bg_style;
+                    // bg base con rango (sin REVERSED todavía).
+                    let mut base_style = line_bg_style;
                     if in_range {
-                        // El rango azul pisa al bg de añadido/removido.
-                        row_style = row_style.bg(BG_RANGE);
+                        base_style = base_style.bg(BG_RANGE);
                     }
-                    if is_cursor {
-                        row_style = row_style.add_modifier(Modifier::REVERSED);
-                    }
+                    // El cursor (REVERSED) solo va en la columna del lado activo.
+                    let old_row_style = if is_cursor && self.active_side == Side::Old {
+                        base_style.add_modifier(Modifier::REVERSED)
+                    } else {
+                        base_style
+                    };
+                    let new_row_style = if is_cursor && self.active_side == Side::New {
+                        base_style.add_modifier(Modifier::REVERSED)
+                    } else {
+                        base_style
+                    };
 
                     match line.kind {
                         LineKind::Removed => {
                             let lineno = line.old_lineno.unwrap_or(0);
                             let prefix = format!("{gutter}{lineno:>4} - ");
-                            let mut spans = vec![Span::styled(prefix, row_style)];
-                            spans.extend(content_spans(&line.content, lang, row_style));
+                            let mut spans = vec![Span::styled(prefix, old_row_style)];
+                            spans.extend(content_spans(&line.content, lang, old_row_style));
                             if !comment_mark.is_empty() {
-                                spans.push(Span::styled(comment_mark.to_owned(), row_style));
+                                spans.push(Span::styled(comment_mark.to_owned(), old_row_style));
                             }
                             old_lines.push(TuiLine::from(spans));
                             new_lines.push(TuiLine::raw(""));
@@ -921,10 +978,10 @@ impl App {
                         LineKind::Added => {
                             let lineno = line.new_lineno.unwrap_or(0);
                             let prefix = format!("{gutter}{lineno:>4} + ");
-                            let mut spans = vec![Span::styled(prefix, row_style)];
-                            spans.extend(content_spans(&line.content, lang, row_style));
+                            let mut spans = vec![Span::styled(prefix, new_row_style)];
+                            spans.extend(content_spans(&line.content, lang, new_row_style));
                             if !comment_mark.is_empty() {
-                                spans.push(Span::styled(comment_mark.to_owned(), row_style));
+                                spans.push(Span::styled(comment_mark.to_owned(), new_row_style));
                             }
                             old_lines.push(TuiLine::raw(""));
                             new_lines.push(TuiLine::from(spans));
@@ -934,12 +991,13 @@ impl App {
                             let new_no = line.new_lineno.unwrap_or(0);
                             let old_prefix = format!("{gutter}{old_no:>4}   ");
                             let new_prefix = format!("{gutter}{new_no:>4}   ");
-                            let mut old_spans = vec![Span::styled(old_prefix, row_style)];
-                            old_spans.extend(content_spans(&line.content, lang, row_style));
-                            let mut new_spans = vec![Span::styled(new_prefix, row_style)];
-                            new_spans.extend(content_spans(&line.content, lang, row_style));
+                            let mut old_spans = vec![Span::styled(old_prefix, old_row_style)];
+                            old_spans.extend(content_spans(&line.content, lang, old_row_style));
+                            let mut new_spans = vec![Span::styled(new_prefix, new_row_style)];
+                            new_spans.extend(content_spans(&line.content, lang, new_row_style));
                             if !comment_mark.is_empty() {
-                                new_spans.push(Span::styled(comment_mark.to_owned(), row_style));
+                                new_spans
+                                    .push(Span::styled(comment_mark.to_owned(), new_row_style));
                             }
                             old_lines.push(TuiLine::from(old_spans));
                             new_lines.push(TuiLine::from(new_spans));
@@ -1155,11 +1213,15 @@ impl App {
     // ---------------------------------------------------------------------------
 
     /// Devuelve true si la línea dada tiene algún comentario anclado.
+    /// Comprueba todos los anclajes posibles de la línea (no depende del lado activo).
     fn line_has_comment(&self, fd: &crate::diff::FileDiff, line: &crate::diff::Line) -> bool {
-        let (side, lineno) = Self::anchor_of(line);
         let file_str = fd.path.display().to_string();
+        let anchors = Self::line_anchors(line);
         self.review.comments().iter().any(|c| {
-            c.file == file_str && c.side == side && lineno >= c.start_line && lineno <= c.end_line
+            c.file == file_str
+                && anchors
+                    .iter()
+                    .any(|(s, n)| c.side == *s && *n >= c.start_line && *n <= c.end_line)
         })
     }
 }
@@ -1539,7 +1601,8 @@ mod tests {
     #[test]
     fn anchor_of_removed_line_is_old_side() {
         let line = make_line(LineKind::Removed, Some(14), None, "    pub status: u8,");
-        let (side, lineno) = App::anchor_of(&line);
+        // Removed → siempre Old, independiente del lado activo.
+        let (side, lineno) = App::anchor_of(&line, Side::New);
         assert_eq!(side, Side::Old);
         assert_eq!(lineno, 14);
     }
@@ -1552,7 +1615,8 @@ mod tests {
             Some(15),
             "    pub status: FileStatus,",
         );
-        let (side, lineno) = App::anchor_of(&line);
+        // Added → siempre New, independiente del lado activo.
+        let (side, lineno) = App::anchor_of(&line, Side::Old);
         assert_eq!(side, Side::New);
         assert_eq!(lineno, 15);
     }
@@ -1565,9 +1629,24 @@ mod tests {
             Some(12),
             "pub struct FileDiff {",
         );
-        let (side, lineno) = App::anchor_of(&line);
+        // Context con lado activo New → New.
+        let (side, lineno) = App::anchor_of(&line, Side::New);
         assert_eq!(side, Side::New);
         assert_eq!(lineno, 12);
+    }
+
+    #[test]
+    fn anchor_of_context_line_is_old_side_when_active_old() {
+        let line = make_line(
+            LineKind::Context,
+            Some(15),
+            Some(16),
+            "    pub hunks: Vec<Hunk>,",
+        );
+        // Context con lado activo Old → Old, old_lineno.
+        let (side, lineno) = App::anchor_of(&line, Side::Old);
+        assert_eq!(side, Side::Old);
+        assert_eq!(lineno, 15);
     }
 
     // --- Comentario de línea: anclaje correcto ---
