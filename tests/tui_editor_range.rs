@@ -4,7 +4,36 @@
 mod common_tui;
 
 use common_tui::{feed, feed_text, key_char, render_to_string, sample_diff};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use reviewv2::app::App;
+
+/// El editor registra mayúsculas/símbolos que llegan con Shift y permite borrar
+/// con Backspace (regresión: antes solo se aceptaban teclas sin modificador).
+#[test]
+fn edit_comment_accepts_shifted_chars_and_backspace() {
+    let mut app = App::new(sample_diff());
+    feed(
+        &mut app,
+        &[key_char('2'), key_char('j'), key_char('j'), key_char('j')],
+    );
+    feed(&mut app, &[key_char('c')]);
+
+    // 'H' con Shift, 'i' sin modificador, 'X' con Shift, y luego Backspace.
+    app.handle_key(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT));
+    app.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT));
+    app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+    let screen = render_to_string(&app, 120, 30);
+    assert!(
+        screen.contains("Hi"),
+        "el editor debe registrar mayúsculas que llegan con Shift, pantalla:\n{screen}"
+    );
+    assert!(
+        !screen.contains("HiX"),
+        "Backspace debe borrar el último carácter escrito, pantalla:\n{screen}"
+    );
+}
 
 /// Al redactar un comentario, la caja del editor muestra el anclaje, el texto
 /// que se va escribiendo y la ayuda de teclas.

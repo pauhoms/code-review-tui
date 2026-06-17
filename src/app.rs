@@ -201,24 +201,27 @@ impl App {
     }
 
     fn handle_edit_comment(&mut self, key: KeyEvent) -> Outcome {
-        if key.modifiers == KeyModifiers::CONTROL
-            && let KeyCode::Char('s') = key.code
-        {
-            self.save_comment();
-            return Outcome::Continue;
-        }
-        if key.modifiers == KeyModifiers::NONE {
-            match key.code {
-                KeyCode::Esc => {
-                    self.comment_buf.clear();
-                    self.comment_target = None;
-                    self.mode = Mode::Navigate;
-                }
-                KeyCode::Char(c) => {
-                    self.comment_buf.push(c);
-                }
-                _ => {}
+        // Shift es parte de producir mayúsculas/símbolos: solo se descarta el
+        // texto si hay Control o Alt.
+        let ctrl_or_alt = key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.save_comment();
             }
+            KeyCode::Esc => {
+                self.comment_buf.clear();
+                self.comment_target = None;
+                self.mode = Mode::Navigate;
+            }
+            KeyCode::Backspace => {
+                self.comment_buf.pop();
+            }
+            KeyCode::Char(c) if !ctrl_or_alt => {
+                self.comment_buf.push(c);
+            }
+            _ => {}
         }
         Outcome::Continue
     }
@@ -248,37 +251,40 @@ impl App {
     }
 
     fn handle_final(&mut self, key: KeyEvent) -> Outcome {
-        if key.modifiers == KeyModifiers::CONTROL
-            && let KeyCode::Char('s') = key.code
-        {
-            return self.finalize_and_save();
-        }
-        if key.modifiers == KeyModifiers::NONE {
-            match key.code {
-                KeyCode::Esc => {
-                    self.mode = Mode::Navigate;
-                }
-                KeyCode::Left => {
-                    self.final_verdict = Verdict::Lgtm;
-                }
-                KeyCode::Right => {
-                    self.final_verdict = Verdict::Ko;
-                }
-                KeyCode::Down => {
-                    let n = self.review.comments().len();
-                    if n > 0 {
-                        self.selected_comment = (self.selected_comment + 1).min(n - 1);
-                    }
-                }
-                KeyCode::Up => {
-                    self.selected_comment = self.selected_comment.saturating_sub(1);
-                }
-                KeyCode::Enter => self.jump_to_comment(),
-                KeyCode::Char(c) => {
-                    self.general_buf.push(c);
-                }
-                _ => {}
+        // Igual que el editor: Shift sí (mayúsculas/símbolos), Control/Alt no.
+        let ctrl_or_alt = key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return self.finalize_and_save();
             }
+            KeyCode::Esc => {
+                self.mode = Mode::Navigate;
+            }
+            KeyCode::Left => {
+                self.final_verdict = Verdict::Lgtm;
+            }
+            KeyCode::Right => {
+                self.final_verdict = Verdict::Ko;
+            }
+            KeyCode::Down => {
+                let n = self.review.comments().len();
+                if n > 0 {
+                    self.selected_comment = (self.selected_comment + 1).min(n - 1);
+                }
+            }
+            KeyCode::Up => {
+                self.selected_comment = self.selected_comment.saturating_sub(1);
+            }
+            KeyCode::Enter => self.jump_to_comment(),
+            KeyCode::Backspace => {
+                self.general_buf.pop();
+            }
+            KeyCode::Char(c) if !ctrl_or_alt => {
+                self.general_buf.push(c);
+            }
+            _ => {}
         }
         Outcome::Continue
     }
