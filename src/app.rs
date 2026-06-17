@@ -11,6 +11,7 @@ use ratatui::text::{Line as TuiLine, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap};
 
 use crate::diff::{Diff, LineKind};
+use crate::highlight::{TokenKind, detect_language, tokenize};
 use crate::review::{Review, Side, Verdict};
 
 // ---------------------------------------------------------------------------
@@ -868,6 +869,7 @@ impl App {
         );
 
         if let Some(fd) = self.diff.files.get(self.selected_file) {
+            let lang = detect_language(&fd.path);
             let mut old_lines: Vec<TuiLine> = Vec::new();
             let mut new_lines: Vec<TuiLine> = Vec::new();
 
@@ -881,38 +883,60 @@ impl App {
                     let gutter = range_gutter(active_range.is_some(), in_range);
                     let has_comment = self.line_has_comment(fd, line);
                     let comment_mark = if has_comment { " 💬" } else { "" };
-                    let mut cursor_style = if is_cursor {
-                        Style::default().add_modifier(Modifier::REVERSED)
-                    } else {
-                        Style::default()
+
+                    // Estilo base: bg según kind de línea (fondo de +/-).
+                    let line_bg_style = match line.kind {
+                        LineKind::Added => Style::default().bg(Color::Green),
+                        LineKind::Removed => Style::default().bg(Color::Red),
+                        LineKind::Context => Style::default(),
                     };
+                    // Modificadores de cursor/rango por encima del bg de línea.
+                    let mut row_style = line_bg_style;
                     if in_range {
-                        cursor_style = cursor_style.bg(Color::Blue);
+                        // El rango azul pisa al bg de añadido/removido.
+                        row_style = row_style.bg(Color::Blue);
+                    }
+                    if is_cursor {
+                        row_style = row_style.add_modifier(Modifier::REVERSED);
                     }
 
                     match line.kind {
                         LineKind::Removed => {
                             let lineno = line.old_lineno.unwrap_or(0);
-                            let text =
-                                format!("{gutter}{lineno:>4} - {}{comment_mark}", line.content);
-                            old_lines.push(TuiLine::styled(text, cursor_style.fg(Color::Red)));
+                            let prefix = format!("{gutter}{lineno:>4} - ");
+                            let mut spans = vec![Span::styled(prefix, row_style)];
+                            spans.extend(content_spans(&line.content, lang, row_style));
+                            if !comment_mark.is_empty() {
+                                spans.push(Span::styled(comment_mark.to_owned(), row_style));
+                            }
+                            old_lines.push(TuiLine::from(spans));
                             new_lines.push(TuiLine::raw(""));
                         }
                         LineKind::Added => {
                             let lineno = line.new_lineno.unwrap_or(0);
-                            let text =
-                                format!("{gutter}{lineno:>4} + {}{comment_mark}", line.content);
+                            let prefix = format!("{gutter}{lineno:>4} + ");
+                            let mut spans = vec![Span::styled(prefix, row_style)];
+                            spans.extend(content_spans(&line.content, lang, row_style));
+                            if !comment_mark.is_empty() {
+                                spans.push(Span::styled(comment_mark.to_owned(), row_style));
+                            }
                             old_lines.push(TuiLine::raw(""));
-                            new_lines.push(TuiLine::styled(text, cursor_style.fg(Color::Green)));
+                            new_lines.push(TuiLine::from(spans));
                         }
                         LineKind::Context => {
                             let old_no = line.old_lineno.unwrap_or(0);
                             let new_no = line.new_lineno.unwrap_or(0);
-                            let old_text = format!("{gutter}{old_no:>4}   {}", line.content);
-                            let new_text =
-                                format!("{gutter}{new_no:>4}   {}{comment_mark}", line.content);
-                            old_lines.push(TuiLine::styled(old_text, cursor_style));
-                            new_lines.push(TuiLine::styled(new_text, cursor_style));
+                            let old_prefix = format!("{gutter}{old_no:>4}   ");
+                            let new_prefix = format!("{gutter}{new_no:>4}   ");
+                            let mut old_spans = vec![Span::styled(old_prefix, row_style)];
+                            old_spans.extend(content_spans(&line.content, lang, row_style));
+                            let mut new_spans = vec![Span::styled(new_prefix, row_style)];
+                            new_spans.extend(content_spans(&line.content, lang, row_style));
+                            if !comment_mark.is_empty() {
+                                new_spans.push(Span::styled(comment_mark.to_owned(), row_style));
+                            }
+                            old_lines.push(TuiLine::from(old_spans));
+                            new_lines.push(TuiLine::from(new_spans));
                         }
                     }
                     flat_idx += 1;
@@ -949,6 +973,7 @@ impl App {
         frame.render_widget(block, area);
 
         if let Some(fd) = self.diff.files.get(self.selected_file) {
+            let lang = detect_language(&fd.path);
             let active_range = self.active_range();
             let mut lines: Vec<TuiLine> = Vec::new();
             let mut flat_idx: usize = 0;
@@ -961,40 +986,52 @@ impl App {
                     let gutter = range_gutter(active_range.is_some(), in_range);
                     let has_comment = self.line_has_comment(fd, line);
                     let comment_mark = if has_comment { " 💬" } else { "" };
-                    let mut cursor_style = if is_cursor {
-                        Style::default().add_modifier(Modifier::REVERSED)
-                    } else {
-                        Style::default()
+
+                    // Estilo base: bg según kind de línea.
+                    let line_bg_style = match line.kind {
+                        LineKind::Added => Style::default().bg(Color::Green),
+                        LineKind::Removed => Style::default().bg(Color::Red),
+                        LineKind::Context => Style::default(),
                     };
+                    let mut row_style = line_bg_style;
                     if in_range {
-                        cursor_style = cursor_style.bg(Color::Blue);
+                        row_style = row_style.bg(Color::Blue);
+                    }
+                    if is_cursor {
+                        row_style = row_style.add_modifier(Modifier::REVERSED);
                     }
 
                     let tui_line = match line.kind {
                         LineKind::Removed => {
                             let old_no = line.old_lineno.unwrap_or(0);
-                            let text = format!(
-                                "{gutter}{old_no:>4}      - {}{comment_mark}",
-                                line.content
-                            );
-                            TuiLine::styled(text, cursor_style.fg(Color::Red))
+                            let prefix = format!("{gutter}{old_no:>4}      - ");
+                            let mut spans = vec![Span::styled(prefix, row_style)];
+                            spans.extend(content_spans(&line.content, lang, row_style));
+                            if !comment_mark.is_empty() {
+                                spans.push(Span::styled(comment_mark.to_owned(), row_style));
+                            }
+                            TuiLine::from(spans)
                         }
                         LineKind::Added => {
                             let new_no = line.new_lineno.unwrap_or(0);
-                            let text = format!(
-                                "{gutter}{new_no:>4}      + {}{comment_mark}",
-                                line.content
-                            );
-                            TuiLine::styled(text, cursor_style.fg(Color::Green))
+                            let prefix = format!("{gutter}{new_no:>4}      + ");
+                            let mut spans = vec![Span::styled(prefix, row_style)];
+                            spans.extend(content_spans(&line.content, lang, row_style));
+                            if !comment_mark.is_empty() {
+                                spans.push(Span::styled(comment_mark.to_owned(), row_style));
+                            }
+                            TuiLine::from(spans)
                         }
                         LineKind::Context => {
                             let old_no = line.old_lineno.unwrap_or(0);
                             let new_no = line.new_lineno.unwrap_or(0);
-                            let text = format!(
-                                "{gutter}{old_no:>4} {new_no:>4}   {}{comment_mark}",
-                                line.content
-                            );
-                            TuiLine::styled(text, cursor_style)
+                            let prefix = format!("{gutter}{old_no:>4} {new_no:>4}   ");
+                            let mut spans = vec![Span::styled(prefix, row_style)];
+                            spans.extend(content_spans(&line.content, lang, row_style));
+                            if !comment_mark.is_empty() {
+                                spans.push(Span::styled(comment_mark.to_owned(), row_style));
+                            }
+                            TuiLine::from(spans)
                         }
                     };
                     lines.push(tui_line);
@@ -1145,6 +1182,41 @@ fn build_anchor(c: &crate::review::Comment) -> String {
         format!("{}:{}", c.file, c.start_line)
     } else {
         format!("{}:{}-{}", c.file, c.start_line, c.end_line)
+    }
+}
+
+/// Mapeo fijo TokenKind → Color de primer plano.
+fn token_fg(kind: TokenKind) -> Color {
+    match kind {
+        TokenKind::Keyword => Color::Magenta,
+        TokenKind::Str => Color::Yellow,
+        TokenKind::Comment => Color::DarkGray,
+        TokenKind::Number => Color::Cyan,
+        TokenKind::Plain => Color::Reset,
+    }
+}
+
+/// Construye los spans del contenido de una línea de código aplicando
+/// resaltado de sintaxis si el lenguaje está detectado. Cada span lleva
+/// el fondo `bg` de la línea (añadido/removido/contexto).
+fn content_spans<'a>(
+    content: &'a str,
+    lang: Option<crate::highlight::Language>,
+    base_style: Style,
+) -> Vec<Span<'a>> {
+    match lang {
+        Some(l) => {
+            let tokens = tokenize(content, l);
+            tokens
+                .into_iter()
+                .map(|tok| {
+                    let fg = token_fg(tok.kind);
+                    let style = base_style.fg(fg);
+                    Span::styled(tok.text, style)
+                })
+                .collect()
+        }
+        None => vec![Span::styled(content.to_owned(), base_style)],
     }
 }
 
